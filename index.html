@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Rack Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky "unracked gear" bench on the left, racks drawn to scale (1U = --u px) flowing on the right. */
+:root {
+  --bg: #e9ecef;
+  --panel: #fbfbfa;
+  --fg: #1c2127;
+  --muted: #5b6570;
+  --line: #cdd3d9;
+  --accent: #c8721d;      /* amber power-LED */
+  --accent-soft: rgba(200,114,29,.14);
+  --danger: #b33a3a;
+  --ok: #3f7a4a;
+  /* rack hardware: always black metal, in both themes */
+  --rail: #2b2e33;
+  --hole: #0c0d0f;
+  --bay: #121417;
+  --slot: rgba(255,255,255,.06);
+  --face-fg: #f1efe8;
+  --u: 32px;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --panel: #1c2026; --fg: #e5e8eb; --muted: #95a0ab; --line: #2f353d;
+    --accent: #eb9a45; --accent-soft: rgba(235,154,69,.16); --danger: #e06a6a; --ok: #6fb27a;
+    --bay: #0b0c0e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --panel: #1c2026; --fg: #e5e8eb; --muted: #95a0ab; --line: #2f353d;
+  --accent: #eb9a45; --accent-soft: rgba(235,154,69,.16); --danger: #e06a6a; --ok: #6fb27a;
+  --bay: #0b0c0e; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.45; }
+body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
+.wrap { padding-inline: 20px; padding-block: 18px 40px; max-width: 1500px; margin: 0 auto; }
+
+/* ---------- top bar ---------- */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px 24px; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.brand h1 { font-family: var(--f-display); font-weight: 700; font-size: 30px; letter-spacing: .02em; text-transform: uppercase; margin: 0; line-height: 1; text-wrap: balance; }
+.brand p { margin: 6px 0 0; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; }
+button, .btn { font: 500 14px/1 var(--f-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 9px 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+button:hover:not(:disabled), .btn:hover { border-color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #1a1208; font-weight: 600; }
+button.primary:hover:not(:disabled) { filter: brightness(1.06); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+button.danger.armed { background: var(--danger); border-color: var(--danger); color: #fff; }
+button:focus-visible, .btn:focus-within, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 14px; }
+.notice button { padding: 6px 10px; font-size: 13px; }
+
+/* ---------- main layout ---------- */
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
+.bench { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.bench-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.label { font-family: var(--f-display); font-weight: 600; font-size: 15px; text-transform: uppercase; letter-spacing: .08em; margin: 0; }
+.sub { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pool { flex: 1; overflow-y: auto; min-height: 140px; display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1.5px dashed var(--line); border-radius: 8px; }
+.pool:empty::before { content: "Nothing here. Drag gear out of a rack to set it aside, or add new gear."; color: var(--muted); font-size: 13px; padding: 10px 4px; text-align: center; }
+.pool.reject, .bay.reject { outline: 2px solid var(--danger); outline-offset: 2px; }
+
+.racks { display: flex; flex-wrap: wrap; gap: 28px 24px; align-items: flex-start; min-width: 0; }
+.rack { width: min(100%, 420px); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rack-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.rack-head h2 { font-family: var(--f-display); font-weight: 700; font-size: 21px; text-transform: uppercase; letter-spacing: .03em; margin: 0; line-height: 1.1; overflow-wrap: anywhere; }
+.rack-head button { padding: 6px 10px; font-size: 13px; flex-shrink: 0; }
+.meter { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--accent); }
+.meter.full span { background: var(--ok); }
+
+.frame { display: grid; grid-template-columns: 26px 16px minmax(0, 1fr) 16px; background: var(--rail); border-radius: 4px; padding: 6px 0; box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 6px 18px rgba(0,0,0,.18); }
+.unums { list-style: none; margin: 0; padding: 0; font-family: var(--f-mono); font-size: 10px; color: #8a929b; text-align: right; padding-right: 5px; }
+.unums li { height: var(--u); line-height: var(--u); font-variant-numeric: tabular-nums; }
+.rail { background-color: var(--rail); background-image:
+    radial-gradient(circle at 50% 22%, var(--hole) 2.4px, transparent 3px),
+    radial-gradient(circle at 50% 78%, var(--hole) 2.4px, transparent 3px);
+  background-size: 100% var(--u); border-inline: 1px solid rgba(255,255,255,.05); }
+.bay { position: relative; display: flex; flex-direction: column; background-color: var(--bay);
+  background-image: linear-gradient(to bottom, transparent calc(var(--u) - 1px), var(--slot) calc(var(--u) - 1px));
+  background-size: 100% var(--u); }
+
+/* ---------- gear faceplates ---------- */
+.unit { --face: #555; position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 22px; color: var(--face-fg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--face) 70%, #fff) 0, var(--face) 2px, var(--face) calc(100% - 2px), color-mix(in srgb, var(--face) 60%, #000) 100%);
+  border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.4); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; overflow: hidden; }
+.unit::before, .unit::after { content: ""; position: absolute; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #d9d9d4, #7c7c78 60%, #3d3d3a); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.unit::before { left: 7px; } .unit::after { right: 7px; }
+.unit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+.unit:hover { filter: brightness(1.08); }
+.face-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.unit.u1 .face-main { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 8px; }
+.uname { font-family: var(--f-display); font-weight: 600; font-size: 15px; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.1; }
+.utype { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.face-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.led { width: 6px; height: 6px; border-radius: 50%; background: #ffb347; box-shadow: 0 0 6px #ff9d1c; }
+.ucount { font-family: var(--f-mono); font-size: 11px; opacity: .85; }
+.knobs { display: flex; gap: 6px; }
+.knobs i { width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #efefea, #9a9a95 55%, #444 100%); box-shadow: 0 1px 1px rgba(0,0,0,.5); }
+.unit.t-blank { background: linear-gradient(180deg, #34373b 0, #25282b 2px, #25282b calc(100% - 2px), #16181a 100%); }
+.unit.t-blank .led, .unit.t-blank .knobs { display: none; }
+.unit.t-blank .uname { opacity: .5; }
+
+.unit.src { display: none; }
+.ghost { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; box-shadow: 0 14px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(0,0,0,.4); opacity: .96; will-change: transform; }
+.ghost-note { position: fixed; z-index: 1001; pointer-events: none; background: var(--danger); color: #fff; font: 600 12px/1 var(--f-body); padding: 6px 8px; border-radius: 4px; white-space: nowrap; }
+.placeholder { flex-shrink: 0; border: 2px dashed var(--accent); background: var(--accent-soft); border-radius: 2px; }
+
+.hint { color: var(--muted); font-size: 13px; margin: 0; }
+.hint kbd { font-family: var(--f-mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; }
+
+/* ---------- dialog ---------- */
+.overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(10,12,15,.5); display: grid; place-items: center; padding: 16px; }
+.dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; width: min(100%, 440px); max-height: 100%; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+.dialog.wide { width: min(100%, 620px); }
+.dialog h3 { font-family: var(--f-display); font-weight: 700; font-size: 22px; text-transform: uppercase; letter-spacing: .03em; margin: 0; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+input, select, textarea { font: 15px var(--f-body); color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; width: 100%; min-width: 0; }
+textarea { font-family: var(--f-mono); font-size: 12px; min-height: 220px; resize: vertical; }
+.stepper { display: grid; grid-template-columns: 40px 1fr 40px; gap: 6px; }
+.stepper button { justify-content: center; padding: 0; font-size: 18px; }
+.stepper input { text-align: center; font-family: var(--f-mono); }
+.err { color: var(--danger); font-size: 13px; margin: 0; min-height: 1em; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; }
+.actions .spacer { flex: 1; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+
+@media (max-width: 780px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .bench { position: static; max-height: none; }
+  .pool { max-height: 360px; }
+  .rack { width: 100%; }
+}
+@media (max-width: 420px) {
+  .wrap { padding-inline: 16px; }
+  :root { --u: 30px; }
+  .row2 { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>Studio Rack Planner</h1>
+      <p id="summary"></p>
+    </div>
+    <div class="tools">
+      <button class="primary" id="btn-add-gear" type="button">+ Add gear</button>
+      <button id="btn-add-rack" type="button">+ Add rack</button>
+      <button id="btn-undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btn-io" type="button">Save / load</button>
+      <button id="btn-clear" class="danger" type="button">Clear all</button>
+    </div>
+  </header>
+
+  <div class="notice" id="example-note" hidden>
+    <span>This is example gear so you can see how it works. Rename or delete it, or start fresh.</span>
+    <button id="btn-start-fresh" type="button">Start with an empty rack</button>
+    <button id="btn-keep" type="button">Keep examples</button>
+  </div>
+
+  <div class="layout">
+    <aside class="bench">
+      <div class="bench-head">
+        <h2 class="label">Unracked gear</h2>
+        <span class="sub" id="pool-sub"></span>
+      </div>
+      <div class="pool" id="pool" data-drop="pool"></div>
+      <p class="hint">Drag faceplates between here and the racks. Click one to edit it. With a unit focused, <kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> moves it.</p>
+    </aside>
+    <section class="racks" id="racks" aria-label="Racks"></section>
+  </div>
+</div>
+
+<script>
+(() => {
+  const TYPES = {
+    preamp:    { label: 'Preamp',          color: '#3b5b86' },
+    dynamics:  { label: 'Compressor',      color: '#8e3a36' },
+    eq:        { label: 'EQ',              color: '#4c6e47' },
+    fx:        { label: 'Reverb / FX',     color: '#6a4c8a' },
+    synth:     { label: 'Synth',           color: '#a8671f' },
+    mixer:     { label: 'Mixer / Summing', color: '#56606b' },
+    interface: { label: 'Interface / AD-DA', color: '#276a6c' },
+    utility:   { label: 'Power / Patchbay', color: '#34383d' },
+    other:     { label: 'Other',           color: '#6b5d4a' },
+    blank:     { label: 'Blank panel',     color: '#25282b' },
+  };
+  const KEY = 'studio-rack-planner-v1';
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const uid = p => p + Math.random().toString(36).slice(2, 9);
+
+  function example() {
+    const u = {}, add = (id, name, h, type) => (u[id] = { name, u: h, type }, id);
+    return {
+      example: true,
+      units: u,
+      racks: [
+        { id: 'r1', name: 'Desk rack left', size: 12, items: [
+          add('a', 'Twin tube mic pre', 2, 'preamp'),
+          add('b', 'FET limiter', 1, 'dynamics'),
+          add('c', 'FET limiter', 1, 'dynamics'),
+          add('d', 'Passive program EQ', 3, 'eq'),
+          add('e', 'Blank', 1, 'blank'),
+          add('f', 'Stereo bus compressor', 2, 'dynamics'),
+        ] },
+        { id: 'r2', name: 'Desk rack right', size: 8, items: [
+          add('g', '16-ch summing mixer', 2, 'mixer'),
+          add('h', 'Digital plate reverb', 1, 'fx'),
+          add('i', 'AD/DA converter', 1, 'interface'),
+          add('j', 'Power conditioner', 1, 'utility'),
+        ] },
+        { id: 'r3', name: 'Synth tower', size: 10, items: [
+          add('k', 'Polysynth module', 4, 'synth'),
+          add('l', '48-point patchbay', 1, 'utility'),
+        ] },
+      ],
+      pool: [
+        add('m', 'Opto leveler', 2, 'dynamics'),
+        add('n', 'Tape delay', 3, 'fx'),
+        add('o', 'Channel strip', 1, 'preamp'),
+        add('p', 'Rack drawer', 2, 'other'),
+      ],
+    };
+  }
+  function empty() {
+    return { example: false, units: {}, pool: [], racks: [{ id: uid('r'), name: 'Rack 1', size: 12, items: [] }] };
+  }
+
+  let state;
+  try { state = JSON.parse(localStorage.getItem(KEY)); } catch (e) { state = null; }
+  if (!valid(state)) state = example();
+
+  function valid(s) {
+    return s && typeof s === 'object' && s.units && Array.isArray(s.pool) && Array.isArray(s.racks)
+      && s.racks.every(r => r && r.id && Array.isArray(r.items) && r.size > 0);
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  /* ---------- history ---------- */
+  const hist = [];
+  function commit(fn) {
+    hist.push(JSON.stringify(state)); if (hist.length > 80) hist.shift();
+    fn(); save(); render();
+  }
+  function undo() { if (!hist.length) return; state = JSON.parse(hist.pop()); save(); render(); }
+
+  /* ---------- helpers ---------- */
+  const rackById = id => state.racks.find(r => r.id === id);
+  const used = (rack, exceptId) => rack.items.reduce((t, id) => t + (id === exceptId ? 0 : (state.units[id]?.u || 0)), 0);
+  const listFor = key => key === 'pool' ? state.pool : rackById(key).items;
+  function locate(id) {
+    if (state.pool.includes(id)) return 'pool';
+    const r = state.racks.find(r => r.items.includes(id)); return r ? r.id : null;
+  }
+  function detach(id) {
+    state.pool = state.pool.filter(x => x !== id);
+    state.racks.forEach(r => r.items = r.items.filter(x => x !== id));
+  }
+
+  /* ---------- render ---------- */
+  function unitHTML(id) {
+    const u = state.units[id]; if (!u) return '';
+    const t = TYPES[u.type] || TYPES.other;
+    const knobs = u.u >= 2 && u.type !== 'blank' ? `<span class="knobs" aria-hidden="true">${'<i></i>'.repeat(Math.min(4, u.u))}</span>` : '';
+    return `<div class="unit ${u.u === 1 ? 'u1' : ''} t-${esc(u.type)}" data-id="${esc(id)}" tabindex="0" role="button"
+      aria-label="${esc(u.name)}, ${u.u}U ${esc(t.label)}. Press Enter to edit."
+      style="--face:${t.color};height:calc(var(--u) * ${u.u})">
+      <div class="face-main"><span class="uname">${esc(u.name)}</span><span class="utype">${esc(t.label)}</span></div>
+      <div class="face-right">${knobs}<span class="led" aria-hidden="true"></span><span class="ucount">${u.u}U</span></div>
+    </div>`;
+  }
+
+  function render() {
+    const pool = $('#pool');
+    pool.innerHTML = state.pool.map(unitHTML).join('');
+    const poolU = state.pool.reduce((t, id) => t + (state.units[id]?.u || 0), 0);
+    $('#pool-sub').textContent = state.pool.length ? `${state.pool.length} unit${state.pool.length > 1 ? 's' : ''} · ${poolU}U` : '';
+
+    $('#racks').innerHTML = state.racks.map(r => {
+      const use = used(r), free = r.size - use;
+      const nums = Array.from({ length: r.size }, (_, i) => `<li>${i + 1}</li>`).join('');
+      return `<article class="rack" data-rack="${esc(r.id)}">
+        <div class="rack-head">
+          <div><h2>${esc(r.name)}</h2><span class="sub">${use}U of ${r.size}U used · ${free}U free</span></div>
+          <button type="button" data-edit-rack="${esc(r.id)}">Edit rack</button>
+        </div>
+        <div class="meter ${free === 0 ? 'full' : ''}"><span style="width:${Math.min(100, use / r.size * 100)}%"></span></div>
+        <div class="frame">
+          <ol class="unums" aria-hidden="true">${nums}</ol>
+          <div class="rail"></div>
+          <div class="bay" data-drop="${esc(r.id)}" style="height:calc(var(--u) * ${r.size})">${r.items.map(unitHTML).join('')}</div>
+          <div class="rail"></div>
+        </div>
+      </article>`;
+    }).join('');
+
+    const totalSize = state.racks.reduce((t, r) => t + r.size, 0);
+    const totalUsed = state.racks.reduce((t, r) => t + used(r), 0);
+    $('#summary').textContent = `${state.racks.length} rack${state.racks.length === 1 ? '' : 's'} · ${totalUsed}U of ${totalSize}U filled · ${state.pool.length} unracked`;
+    $('#btn-undo').disabled = !hist.length;
+    $('#example-note').hidden = !state.example;
+  }
+
+  /* ---------- drag and drop (pointer events: mouse, pen and touch) ---------- */
+  let drag = null;
+  document.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.unit');
+    if (!el || e.button !== 0 || el.classList.contains('ghost')) return;
+    const r = el.getBoundingClientRect();
+    drag = { id: el.dataset.id, el, sx: e.clientX, sy: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, w: r.width, h: r.height, started: false };
+  });
+  window.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (!drag.started) {
+      if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
+      startDrag();
+    }
+    e.preventDefault();
+    moveDrag(e.clientX, e.clientY);
+  }, { passive: false });
+  window.addEventListener('pointerup', e => {
+    if (!drag) return;
+    const d = drag;
+    if (d.started) endDrag(true); else { drag = null; openUnitDialog(d.id); }
+  });
+  window.addEventListener('pointercancel', () => { if (drag?.started) endDrag(false); drag = null; });
+
+  function startDrag() {
+    drag.started = true;
+    const ghost = drag.el.cloneNode(true);
+    ghost.classList.add('ghost'); ghost.removeAttribute('tabindex');
+    ghost.style.width = drag.w + 'px'; ghost.style.height = drag.h + 'px';
+    document.body.appendChild(ghost);
+    const ph = document.createElement('div');
+    ph.className = 'placeholder'; ph.style.height = drag.h + 'px';
+    drag.el.parentNode.insertBefore(ph, drag.el);
+    drag.el.classList.add('src');
+    const note = document.createElement('div'); note.className = 'ghost-note'; note.hidden = true;
+    document.body.appendChild(note);
+    Object.assign(drag, { ghost, ph, note });
+    document.body.classList.add('is-dragging');
+  }
+
+  function moveDrag(x, y) {
+    const { ghost, ph, note } = drag;
+    ghost.style.transform = `translate(${x - drag.ox}px, ${y - drag.oy}px) rotate(-.6deg)`;
+    document.querySelectorAll('.reject').forEach(n => n.classList.remove('reject'));
+    note.hidden = true;
+
+    // auto-scroll near viewport edges
+    const edge = 50;
+    if (y < edge) window.scrollBy(0, -12); else if (y > innerHeight - edge) window.scrollBy(0, 12);
+
+    const under = document.elementFromPoint(x, y);
+    const cont = under && under.closest('[data-drop]');
+    if (!cont) { ph.remove(); return; }
+    const key = cont.dataset.drop;
+    if (key !== 'pool') {
+      const rack = rackById(key), need = state.units[drag.id].u, free = rack.size - used(rack, drag.id);
+      if (need > free) {
+        ph.remove(); cont.classList.add('reject');
+        note.textContent = `Won't fit: needs ${need}U, ${free}U free`;
+        note.hidden = false;
+        note.style.left = Math.min(x + 14, innerWidth - note.offsetWidth - 8) + 'px';
+        note.style.top = (y + 18) + 'px';
+        return;
+      }
+    }
+    const kids = [...cont.children].filter(k => k.classList.contains('unit') && !k.classList.contains('src'));
+    let before = null;
+    for (const k of kids) { const r = k.getBoundingClientRect(); if (y < r.top + r.height / 2) { before = k; break; } }
+    let next = ph.nextElementSibling; while (next && next.classList.contains('src')) next = next.nextElementSibling;
+    if (ph.parentNode !== cont || next !== before) cont.insertBefore(ph, before);
+  }
+
+  function endDrag(apply) {
+    const { ph, ghost, note, id } = drag;
+    const cont = ph.parentNode;
+    let idx = 0;
+    if (apply && cont) {
+      for (const c of cont.children) { if (c === ph) break; if (c.classList.contains('unit') && !c.classList.contains('src')) idx++; }
+    }
+    ghost.remove(); note.remove(); ph.remove();
+    document.querySelectorAll('.reject').forEach(n => n.classList.remove('reject'));
+    document.body.classList.remove('is-dragging');
+    drag = null;
+    if (apply && cont) {
+      const key = cont.dataset.drop;
+      const from = locate(id), fromIdx = listFor(from).indexOf(id);
+      if (from === key && fromIdx === idx) { render(); return; }
+      commit(() => { detach(id); listFor(key).splice(idx, 0, id); });
+      requestAnimationFrame(() => document.querySelector(`.unit[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }));
+    } else render();
+  }
+
+  /* keyboard: Enter edits, Alt+Up/Down moves */
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !$('.overlay') && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) { e.preventDefault(); undo(); return; }
+    const el = e.target.closest?.('.unit'); if (!el || el.classList.contains('ghost')) return;
+    const id = el.dataset.id;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openUnitDialog(id); }
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const list = listFor(locate(id)), i = list.indexOf(id), j = i + (e.key === 'ArrowUp' ? -1 : 1);
+      if (j < 0 || j >= list.length) return;
+      commit(() => { list.splice(i, 1); list.splice(j, 0, id); });
+      document.querySelector(`.unit[data-id="${CSS.escape(id)}"]`)?.focus();
+    }
+  });
+
+  /* ---------- dialogs ---------- */
+  let lastFocus = null;
+  function openDialog(html, wide) {
+    closeDialog();
+    lastFocus = document.activeElement;
+    const ov = document.createElement('div');
+    ov.className = 'overlay';
+    ov.innerHTML = `<div class="dialog ${wide ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div>`;
+    ov.addEventListener('pointerdown', e => { if (e.target === ov) closeDialog(); });
+    document.body.appendChild(ov);
+    setTimeout(() => ov.querySelector('input, select, textarea, button')?.focus(), 0);
+    return ov.firstElementChild;
+  }
+  function closeDialog() {
+    const ov = $('.overlay'); if (!ov) return;
+    ov.remove(); lastFocus?.focus?.({ preventScroll: true });
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('.overlay')) closeDialog(); });
+
+  function armDelete(btn, label, onConfirm) {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('armed')) return onConfirm();
+      btn.classList.add('armed'); btn.textContent = label;
+      setTimeout(() => { if (btn.isConnected) { btn.classList.remove('armed'); btn.textContent = btn.dataset.orig; } }, 4000);
+    });
+    btn.dataset.orig = btn.textContent;
+  }
+  function stepper(dlg, sel, min, max) {
+    const inp = $(sel, dlg);
+    dlg.querySelectorAll(`[data-step="${sel}"]`).forEach(b => b.addEventListener('click', () => {
+      const v = Math.max(min, Math.min(max, (parseInt(inp.value, 10) || min) + Number(b.dataset.d)));
+      inp.value = v; inp.dispatchEvent(new Event('input'));
+    }));
+  }
+  const stepHTML = (id, val, min, max) => `<div class="stepper">
+      <button type="button" data-step="#${id}" data-d="-1" aria-label="Decrease">−</button>
+      <input id="${id}" type="number" inputmode="numeric" min="${min}" max="${max}" value="${val}">
+      <button type="button" data-step="#${id}" data-d="1" aria-label="Increase">+</button></div>`;
+
+  function openUnitDialog(id) {
+    const isNew = !id;
+    const u = isNew ? { name: '', u: 1, type: 'dynamics' } : state.units[id];
+    const loc = isNew ? 'pool' : locate(id);
+    const typeOpts = Object.entries(TYPES).map(([k, t]) => `<option value="${k}" ${k === u.type ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+    const locOpts = `<option value="pool">Unracked</option>` + state.racks.map(r =>
+      `<option value="${esc(r.id)}" ${r.id === loc ? 'selected' : ''}>${esc(r.name)} (${r.size - used(r, id)}U free)</option>`).join('');
+    const dlg = openDialog(`
+      <h3>${isNew ? 'Add gear' : 'Edit gear'}</h3>
+      <form id="unit-form" class="field" style="gap:14px">
+        <div class="field"><label for="f-name">Name</label>
+          <input id="f-name" type="text" maxlength="60" placeholder="e.g. Stereo bus compressor" value="${esc(u.name)}"></div>
+        <div class="row2">
+          <div class="field"><label for="f-u">Height (rack units)</label>${stepHTML('f-u', u.u, 1, 16)}</div>
+          <div class="field"><label for="f-type">Type</label><select id="f-type">${typeOpts}</select></div>
+        </div>
+        <div class="field"><label for="f-loc">Location</label><select id="f-loc">${locOpts}</select></div>
+        <p class="err" id="f-err" role="alert"></p>
+        <div class="actions">
+          ${isNew ? '' : '<button type="button" class="danger" id="f-del">Delete</button><button type="button" id="f-dup">Duplicate</button>'}
+          <span class="spacer"></span>
+          <button type="button" id="f-cancel">Cancel</button>
+          <button type="submit" class="primary">${isNew ? 'Add gear' : 'Save'}</button>
+        </div>
+      </form>`);
+    stepper(dlg, '#f-u', 1, 16);
+    $('#f-cancel', dlg).onclick = closeDialog;
+    if (!isNew) {
+      armDelete($('#f-del', dlg), 'Click again to delete', () => {
+        closeDialog(); commit(() => { detach(id); delete state.units[id]; });
+      });
+      $('#f-dup', dlg).onclick = () => {
+        const nid = uid('u');
+        closeDialog();
+        commit(() => { state.units[nid] = { ...state.units[id] }; state.pool.push(nid); });
+      };
+    }
+    $('#unit-form', dlg).addEventListener('submit', e => {
+      e.preventDefault();
+      const name = $('#f-name', dlg).value.trim() || 'Untitled unit';
+      const h = Math.max(1, Math.min(16, parseInt($('#f-u', dlg).value, 10) || 1));
+      const type = $('#f-type', dlg).value;
+      const dest = $('#f-loc', dlg).value;
+      if (dest !== 'pool') {
+        const rack = rackById(dest), free = rack.size - used(rack, id);
+        if (h > free) {
+          $('#f-err', dlg).textContent = `${rack.name} has ${free}U free and this unit needs ${h}U. Pick another location or make room first.`;
+          return;
+        }
+      }
+      closeDialog();
+      commit(() => {
+        const nid = id || uid('u');
+        state.units[nid] = { name, u: h, type };
+        if (isNew || dest !== loc) { detach(nid); listFor(dest).push(nid); }
+      });
+    });
+  }
+
+  function openRackDialog(id) {
+    const isNew = !id;
+    const r = isNew ? { name: `Rack ${state.racks.length + 1}`, size: 12, items: [] } : rackById(id);
+    const inUse = isNew ? 0 : used(r);
+    const dlg = openDialog(`
+      <h3>${isNew ? 'Add rack' : 'Edit rack'}</h3>
+      <form id="rack-form" class="field" style="gap:14px">
+        <div class="field"><label for="r-name">Name</label>
+          <input id="r-name" type="text" maxlength="40" value="${esc(r.name)}"></div>
+        <div class="field"><label for="r-size">Size (rack units)</label>${stepHTML('r-size', r.size, 1, 48)}
+          ${inUse ? `<span class="sub">${inUse}U is filled, so it can't be smaller than ${inUse}U.</span>` : ''}</div>
+        ${isNew ? '' : `<div class="field"><label>Position</label><div class="actions" style="justify-content:flex-start">
+          <button type="button" id="r-left">Move earlier</button><button type="button" id="r-right">Move later</button></div></div>`}
+        <p class="err" id="r-err" role="alert"></p>
+        <div class="actions">
+          ${isNew ? '' : '<button type="button" class="danger" id="r-del">Delete rack</button>'}
+          <span class="spacer"></span>
+          <button type="button" id="r-cancel">Cancel</button>
+          <button type="submit" class="primary">${isNew ? 'Add rack' : 'Save'}</button>
+        </div>
+      </form>`);
+    stepper(dlg, '#r-size', 1, 48);
+    $('#r-cancel', dlg).onclick = closeDialog;
+    if (!isNew) {
+      armDelete($('#r-del', dlg), r.items.length ? 'Delete? Gear goes to Unracked' : 'Click again to delete', () => {
+        closeDialog();
+        commit(() => { state.pool.push(...r.items); state.racks = state.racks.filter(x => x.id !== id); });
+      });
+      const shift = d => {
+        const i = state.racks.indexOf(r), j = i + d;
+        if (j < 0 || j >= state.racks.length) return;
+        commit(() => { state.racks.splice(i, 1); state.racks.splice(j, 0, r); });
+      };
+      $('#r-left', dlg).onclick = () => shift(-1);
+      $('#r-right', dlg).onclick = () => shift(1);
+    }
+    $('#rack-form', dlg).addEventListener('submit', e => {
+      e.preventDefault();
+      const name = $('#r-name', dlg).value.trim() || 'Untitled rack';
+      const size = Math.max(1, Math.min(48, parseInt($('#r-size', dlg).value, 10) || 1));
+      if (size < inUse) {
+        $('#r-err', dlg).textContent = `${inUse}U of gear is in this rack. Move some out before shrinking it below ${inUse}U.`;
+        return;
+      }
+      closeDialog();
+      commit(() => {
+        if (isNew) state.racks.push({ id: uid('r'), name, size, items: [] });
+        else { r.name = name; r.size = size; }
+      });
+    });
+  }
+
+  function openIODialog() {
+    const json = JSON.stringify({ racks: state.racks, pool: state.pool, units: state.units }, null, 2);
+    const dlg = openDialog(`
+      <h3>Save / load layout</h3>
+      <p class="hint" style="font-size:14px">Your layout saves automatically in this browser. To keep a backup or move it to another computer, copy this text into a file. To restore, paste a saved layout here or open a .json file, then choose Load.</p>
+      <div class="field"><label for="io-text">Layout data (JSON)</label><textarea id="io-text" spellcheck="false">${esc(json)}</textarea></div>
+      <p class="err" id="io-err" role="alert"></p>
+      <div class="actions">
+        <label class="btn" for="io-file">Open .json file…<input id="io-file" type="file" accept=".json,application/json,text/plain" hidden></label>
+        <span class="spacer"></span>
+        <button type="button" id="io-copy">Copy</button>
+        <button type="button" id="io-close">Close</button>
+        <button type="button" class="primary" id="io-load">Load</button>
+      </div>`, true);
+    const ta = $('#io-text', dlg), err = $('#io-err', dlg);
+    $('#io-close', dlg).onclick = closeDialog;
+    $('#io-copy', dlg).onclick = e => {
+      const b = e.currentTarget;
+      const ok = () => { b.textContent = 'Copied'; setTimeout(() => b.isConnected && (b.textContent = 'Copy'), 1600); };
+      const fallback = () => { ta.focus(); ta.select(); b.textContent = 'Selected, press Ctrl+C'; };
+      try { navigator.clipboard.writeText(ta.value).then(ok, fallback); } catch (x) { fallback(); }
+    };
+    $('#io-file', dlg).onchange = e => {
+      const f = e.target.files[0]; if (!f) return;
+      const rd = new FileReader(); rd.onload = () => { ta.value = rd.result; err.textContent = 'File loaded. Choose Load to apply it.'; }; rd.readAsText(f);
+    };
+    $('#io-load', dlg).onclick = () => {
+      let d;
+      try { d = JSON.parse(ta.value); } catch (x) { err.textContent = "That text isn't valid JSON. Paste a layout copied from this planner."; return; }
+      if (!valid(d)) { err.textContent = "That JSON doesn't look like a rack layout. It needs racks, pool and units."; return; }
+      closeDialog();
+      commit(() => { state = { example: false, units: d.units, pool: d.pool, racks: d.racks }; });
+    };
+  }
+
+  /* ---------- wiring ---------- */
+  $('#btn-add-gear').onclick = () => openUnitDialog(null);
+  $('#btn-add-rack').onclick = () => openRackDialog(null);
+  $('#btn-undo').onclick = undo;
+  $('#btn-io').onclick = openIODialog;
+  armDelete($('#btn-clear'), 'Click again to clear', () => {
+    commit(() => { state = empty(); });
+    const b = $('#btn-clear'); b.classList.remove('armed'); b.textContent = b.dataset.orig;
+  });
+  $('#btn-start-fresh').onclick = () => commit(() => { state = empty(); });
+  $('#btn-keep').onclick = () => commit(() => { state.example = false; });
+  $('#racks').addEventListener('click', e => {
+    const b = e.target.closest('[data-edit-rack]'); if (b) openRackDialog(b.dataset.editRack);
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
